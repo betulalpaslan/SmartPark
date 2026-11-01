@@ -67,7 +67,7 @@ A microservices-based smart parking management system that monitors real-time pa
 |---------|----------------|------------|----------------|
 | data-ingestion | — | Python + APScheduler | Polls İzmir API every 30s, publishes changes to RabbitMQ |
 | occupancy-state | 8000 | FastAPI + Redis | Maintains live occupancy state, serves geo queries |
-| forecasting | 8000 | FastAPI + TimescaleDB | Produces 30-min forecasts using EWMA + hourly profiles; also serves the analytics endpoints from the `lot_hourly` continuous aggregate |
+| forecasting | 8000 | FastAPI + TimescaleDB | Produces occupancy forecasts by blending an EWMA of the live signal with a per-lot day-of-week × hour profile; also serves the analytics endpoints from the `lot_hourly` continuous aggregate |
 | pricing-routing | 8000 | FastAPI + PostgreSQL | Calculates dynamic prices, recommends best parking spots |
 | notification | 8000 | FastAPI + WebSocket | Pushes live updates to connected browsers |
 | frontend | 80 | Nginx + Leaflet.js | Map, search, and analytics UI |
@@ -118,7 +118,7 @@ GET /health                             → service health status
 
 ### Forecasting
 ```
-GET /forecast/{lot_id}?horizon=30m      → occupancy forecast
+GET /forecast/{lot_id}?horizon=30m      → occupancy forecast (horizon: 30m, 90min, 2h …)
 GET /health                             → service health status
 ```
 

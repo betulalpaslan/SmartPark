@@ -19,6 +19,12 @@ def install_data_ingestion_stubs():
     requests.get = lambda *args, **kwargs: None
     sys.modules["requests"] = requests
 
+    # data-ingestion "from curl_cffi import requests" yapiyor; stub oraya kurulmali.
+    curl_cffi = types.ModuleType("curl_cffi")
+    curl_cffi.requests = requests
+    sys.modules["curl_cffi"] = curl_cffi
+    sys.modules["curl_cffi.requests"] = requests
+
     pika = types.ModuleType("pika")
     pika.BlockingConnection = object
     pika.URLParameters = lambda value: value

@@ -7,6 +7,7 @@ import pika
 from curl_cffi import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "30"))
 EXCHANGE = "parking"
 ROUTING_KEY = "parking.occupancy.changed"
+IZMIR_TZ = ZoneInfo("Europe/Istanbul")
 
 _prev: dict[str, str] = {}
 
@@ -48,22 +50,49 @@ _mock_occupied: dict[str, int] = {
 }
 
 
+_LOT_BY_ID = {lot["lot_id"]: lot for lot in _MOCK_LOTS}
+
+# Gün içi doluluk profili (İzmir yerel saati): gece düşük, öğlen ve akşam zirveli.
+_HOURLY_SHAPE = (
+    0.25, 0.22, 0.20, 0.20, 0.22, 0.28,   # 00-05
+    0.35, 0.50, 0.70, 0.85, 0.90, 0.92,   # 06-11
+    0.95, 0.95, 0.90, 0.90, 0.92, 0.98,   # 12-17
+    1.00, 0.90, 0.75, 0.60, 0.45, 0.32,   # 18-23
+)
+_SHAPE_MEAN = sum(_HOURLY_SHAPE) / len(_HOURLY_SHAPE)
+_REVERSION = 0.05   # her turda hedefe yaklaşma oranı (~7 dk yarılanma)
+_NOISE_PCT = 0.01   # tur başına ±%1 kapasite gürültü
+
+# Yukarıdaki gerçek ölçüm, lot'un gün ortalaması doluluk oranı kabul edilir.
+# Ölçek, profilin zirvesi %100'ü aşmayacak şekilde sınırlanır: aksi halde yoğun
+# lotlar gün boyu %100'de kırpılır ve forecasting'in öğreneceği desen kalmaz.
+# Kırpılacak kadar dolu bir lotta ölçüm, gün ortalaması değil zirvesi sayılır.
+_mock_scale: dict[str, float] = {
+    lid: min(occ / _LOT_BY_ID[lid]["capacity"] / _SHAPE_MEAN, 1.0 / max(_HOURLY_SHAPE))
+    for lid, occ in _mock_occupied.items()
+}
+
+
+def _target_occupied(lid: str, hour: int) -> int:
+    """Lot'un o saatteki hedef doluluğu: ölçek × saat profili."""
+    cap = _LOT_BY_ID[lid]["capacity"]
+    return round(cap * _mock_scale[lid] * _HOURLY_SHAPE[hour])
+
+
 def _mock_data() -> list[dict]:
-    """Her çağrıda hafif rastgele dalgalanma ekleyerek gerçekçi veri üretir."""
+    """Gün içi profile yakınsayan, üzerine hafif gürültü binen gerçekçi veri üretir."""
     result = []
     now = datetime.now(timezone.utc)
-    hour = now.hour
-    # Gün içi doluluk çarpanı: gece düşük, öğle/akşam yoğun
-    peak = 1.0 + 0.3 * max(0.0, 1.0 - abs(hour - 12) / 6)
+    hour = now.astimezone(IZMIR_TZ).hour
 
     for lot in _MOCK_LOTS:
         lid = lot["lot_id"]
         cap = lot["capacity"]
         occ = _mock_occupied[lid]
-        # ±%5 rastgele değişim, kapasiteye ve günün saatine göre sınırlı
-        delta = random.randint(-max(1, int(cap * 0.05)), max(1, int(cap * 0.05)))
-        target = int(min(cap, max(0, occ + delta)) * peak / max(peak, 1.0))
-        target = min(cap, max(0, target))
+        # Saat profilinin hedefine doğru yavaş yakınsama + küçük rastgele gürültü
+        drift = (_target_occupied(lid, hour) - occ) * _REVERSION
+        noise = random.randint(-max(1, int(cap * _NOISE_PCT)), max(1, int(cap * _NOISE_PCT)))
+        target = min(cap, max(0, round(occ + drift + noise)))
         _mock_occupied[lid] = target
         free = cap - target
         result.append({
@@ -192,6 +221,8 @@ def poll_and_publish():
         if isinstance(data, dict):
             data = data.get("Value") or data.get("value") or data.get("data") or []
         lots = [l for raw in data if (l := normalize(raw)) is not None]
+        if not lots:
+            raise ValueError("canli yanit bos ya da beklenmeyen semada")
         source = "live"
     except Exception as exc:
         log.warning("Canli API erisilemedi (%s) — mock veri kullaniliyor", exc)

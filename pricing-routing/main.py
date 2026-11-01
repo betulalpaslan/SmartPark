@@ -8,6 +8,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 import psycopg2
@@ -23,6 +24,8 @@ log = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://smartpark:smartpark@localhost:5432/pricing")
 OCCUPANCY_URL = os.getenv("OCCUPANCY_SERVICE_URL", "http://occupancy-state:8000")
 FORECASTING_URL = os.getenv("FORECASTING_SERVICE_URL", "http://forecasting:8000")
+
+IZMIR_TZ = ZoneInfo("Europe/Istanbul")   # zirve saatleri yerel saate gore
 
 SEARCH_RADIUS_M = 3000.0
 MAX_MULTIPLIER = 1.8
@@ -180,6 +183,7 @@ def compute_multiplier(occ_pct: float, forecast_pct: float, hour: int) -> float:
     trend = (forecast_pct - occ_pct) / 100.0
     trend_adj = 1.0 + trend * 0.3
 
+    # hour = İzmir yerel saati; sabah ve akşam trafik zirveleri
     peak = hour in range(8, 10) or hour in range(17, 20)
     tod_adj = 1.1 if peak else 1.0
 
@@ -307,7 +311,7 @@ async def recommend(
         raise HTTPException(404, detail="Hedefe yakın otopark bulunamadı")
 
     prices = _ensure_prices(lots, _all_prices())
-    now_hour = datetime.now(timezone.utc).hour
+    now_hour = datetime.now(IZMIR_TZ).hour
 
     async with httpx.AsyncClient(timeout=5.0) as client:
         forecasts = await asyncio.gather(
@@ -377,7 +381,7 @@ async def get_pricing(lot_id: str, duration_hours: int = 1):
 
     prices = _all_prices()
     base = prices.get(lot_id, 10.0)
-    mult = compute_multiplier(lot["occupancy_pct"], forecast_pct, datetime.now(timezone.utc).hour)
+    mult = compute_multiplier(lot["occupancy_pct"], forecast_pct, datetime.now(IZMIR_TZ).hour)
     return {
         "lot_id": lot_id,
         "base_price_per_hour": base,

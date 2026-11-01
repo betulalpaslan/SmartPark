@@ -144,6 +144,7 @@ let map, destMarker, userMarker;
 let destCoords = null;
 let userCoords = null;
 let lotMarkers = {};
+let lotPrices = {};
 
 map = L.map('map').setView([38.4192, 27.1287], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -227,6 +228,7 @@ function locateUser() {
 function renderMarkers(lots, priceMap) {
   Object.values(lotMarkers).forEach(m => map.removeLayer(m));
   lotMarkers = {};
+  lotPrices = priceMap;
   lots.forEach(lot => {
     const m = L.marker([lot.lat, lot.lng], { icon: pinIcon(lot.occupancy_pct) })
       .bindPopup(popupHtml(lot, priceMap[lot.lot_id] ?? null))
@@ -355,7 +357,7 @@ function connectWS() {
     const lot = JSON.parse(e.data);
     if (lotMarkers[lot.lot_id]) {
       lotMarkers[lot.lot_id].setIcon(pinIcon(lot.occupancy_pct));
-      lotMarkers[lot.lot_id].setPopupContent(popupHtml(lot, null));
+      lotMarkers[lot.lot_id].setPopupContent(popupHtml(lot, lotPrices[lot.lot_id] ?? null));
     }
   };
   ws.onclose = () => {
